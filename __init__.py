@@ -3,15 +3,17 @@ import configparser
 import subprocess
 import traceback
 import threading
+from typing import Optional, Dict
 from binaryninja import Settings, log_info, log_error, BinaryViewType # type: ignore
-from binaryninja.debugger import DebuggerEventType # type: ignore
+from binaryninja.binaryview import BinaryView # type: ignore
+from binaryninja.debugger import DebuggerEventType, DebuggerController, DebuggerEvent # type: ignore
 
 from .settings import SETTING_MAP, register_scyllahide_settings
 
-g_binary_states = {}
-g_state_lock = threading.Lock()
+g_binary_states: Dict[str, 'BinaryDebugState'] = {}
+g_state_lock: threading.Lock = threading.Lock()
 
-SCYLLAHIDE_DEFAULTS = {
+SCYLLAHIDE_DEFAULTS: Dict[str, str] = {
     "DLLNormal": "1",
     "DLLStealth": "0",
     "DLLUnload": "0",
@@ -22,14 +24,14 @@ SCYLLAHIDE_DEFAULTS = {
 }
 
 class BinaryDebugState:
-    def __init__(self, bv, controller):
-        self.bv = bv
-        self.file_path = bv.file.filename
-        self.controller = controller
-        self.callback_id = None
-        self.handled_initial_stop = False
+    def __init__(self, bv: BinaryView, controller: DebuggerController) -> None:
+        self.bv: BinaryView = bv
+        self.file_path: str = bv.file.filename
+        self.controller: DebuggerController = controller
+        self.callback_id: Optional[int] = None
+        self.handled_initial_stop: bool = False
 
-    def on_debug_event(self, event):
+    def on_debug_event(self, event: DebuggerEvent) -> None:
         if event.type == DebuggerEventType.LaunchEventType:
             self.handled_initial_stop = False
 
@@ -97,10 +99,10 @@ class BinaryDebugState:
 
                 self.handled_initial_stop = True
 
-def get_scylla_dir():
+def get_scylla_dir() -> str:
     return Settings().get_string("debugger.scyllaHide.02_directory")
 
-def validate_scyllahide_directory():
+def validate_scyllahide_directory() -> bool:
     try:
         scylla_dir = get_scylla_dir()
 
@@ -131,7 +133,7 @@ def validate_scyllahide_directory():
         log_error(f"[ScyllaNinja] Directory validation failed: {e}")
         return False
 
-def write_scylla_ini():
+def write_scylla_ini() -> bool:
     try:
         settings = Settings()
         profile_name = settings.get_string("debugger.scyllaHide.01_profile")
@@ -176,7 +178,7 @@ def write_scylla_ini():
         log_error(traceback.format_exc())
         return False
 
-def get_target_pid(controller):
+def get_target_pid(controller: DebuggerController) -> Optional[int]:
     try:
         modules = controller.modules
         if not modules:
@@ -197,7 +199,7 @@ def get_target_pid(controller):
         log_error(traceback.format_exc())
         return None
 
-def get_target_architecture(controller):
+def get_target_architecture(controller: DebuggerController) -> Optional[str]:
     try:
         if hasattr(controller, 'data') and controller.data:
             arch = controller.data.arch
@@ -214,7 +216,7 @@ def get_target_architecture(controller):
         log_error(traceback.format_exc())
         return None
 
-def is_scyllahide_enabled():
+def is_scyllahide_enabled() -> bool:
     try:
         settings = Settings()
         return settings.get_bool("debugger.scyllaHide.00_enable")
@@ -222,17 +224,17 @@ def is_scyllahide_enabled():
         return False
 
 
-def register_debug_callback(bv):
+def register_debug_callback(bv: BinaryView) -> bool:
     global g_binary_states
 
-    file_path = bv.file.filename
+    file_path: str = bv.file.filename
 
     with g_state_lock:
         if file_path in g_binary_states:
             return True
 
         try:
-            from binaryninja.debugger import DebuggerController
+            from binaryninja.debugger import DebuggerController # type: ignore
 
             controller = DebuggerController(bv)
             state = BinaryDebugState(bv, controller)
@@ -245,14 +247,14 @@ def register_debug_callback(bv):
             log_error(f"[ScyllaNinja] Failed to register callback: {e}")
             return False
 
-def on_view_open(bv):
+def on_view_open(bv: BinaryView) -> None:
     register_debug_callback(bv)
 
-def on_directory_changed(setting_name):
+def on_directory_changed(setting_name: str) -> None:
     if setting_name == "debugger.scyllaHide.02_directory":
         validate_scyllahide_directory()
 
-def init_plugin():
+def init_plugin() -> None:
     try:
         register_scyllahide_settings()
     except Exception as e:

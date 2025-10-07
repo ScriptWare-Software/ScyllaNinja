@@ -1,9 +1,10 @@
 import os
-from binaryninja import Settings
+from typing import Dict
+from binaryninja import Settings # type: ignore
 
-PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
+PLUGIN_DIR: str = os.path.dirname(os.path.abspath(__file__))
 
-SETTING_MAP = {
+SETTING_MAP: Dict[str, str] = {
     "pebBeingDebugged": "PebBeingDebugged",
     "pebHeapFlags": "PebHeapFlags",
     "pebNtGlobalFlag": "PebNtGlobalFlag",
@@ -37,7 +38,7 @@ SETTING_MAP = {
     "ntQueryPerformanceCounter": "NtQueryPerformanceCounterHook",
 }
 
-def register_scyllahide_settings():
+def register_scyllahide_settings() -> None:
     settings = Settings()
 
     settings.register_setting("debugger.scyllaHide.00_enable", '''{
