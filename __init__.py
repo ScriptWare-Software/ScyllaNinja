@@ -2,12 +2,14 @@ import os
 import configparser
 import subprocess
 import traceback
+import threading
 from binaryninja import Settings, log_info, log_error, BinaryViewType # type: ignore
 from binaryninja.debugger import DebuggerEventType # type: ignore
 
 from .settings import SETTING_MAP, register_scyllahide_settings
 
 g_binary_states = {}
+g_state_lock = threading.Lock()
 
 SCYLLAHIDE_DEFAULTS = {
     "DLLNormal": "1",
@@ -221,22 +223,24 @@ def register_debug_callback(bv):
     global g_binary_states
 
     file_path = bv.file.filename
-    if file_path in g_binary_states:
-        return True
 
-    try:
-        from binaryninja.debugger import DebuggerController
+    with g_state_lock:
+        if file_path in g_binary_states:
+            return True
 
-        controller = DebuggerController(bv)
-        state = BinaryDebugState(bv, controller)
-        state.callback_id = controller.register_event_callback(state.on_debug_event, "ScyllaHide Injection")
-        g_binary_states[file_path] = state
+        try:
+            from binaryninja.debugger import DebuggerController
 
-        return True
+            controller = DebuggerController(bv)
+            state = BinaryDebugState(bv, controller)
+            state.callback_id = controller.register_event_callback(state.on_debug_event, "ScyllaHide Injection")
+            g_binary_states[file_path] = state
 
-    except Exception as e:
-        log_error(f"[ScyllaNinja] Failed to register callback: {e}")
-        return False
+            return True
+
+        except Exception as e:
+            log_error(f"[ScyllaNinja] Failed to register callback: {e}")
+            return False
 
 def on_view_open(bv):
     register_debug_callback(bv)
