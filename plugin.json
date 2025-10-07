@@ -1,0 +1,20 @@
+{
+	"pluginmetadataversion": 2,
+	"name": "ScyllaNinja",
+	"type": ["helper", "ui"],
+	"api": ["python3"],
+	"description": "Automatically inject ScyllaHide anti-anti-debug DLL when debugging Windows executables",
+	"longdescription": "Binary Ninja integration for [ScyllaHide](https://github.com/x64dbg/ScyllaHide) by x64dbg. Automatically injects the ScyllaHide DLL when the debugger hits the initial breakpoint, helping bypass common anti-debugging techniques.\n\n**Setup:**\n1. Download ScyllaHide binaries from https://github.com/x64dbg/ScyllaHide/releases/tag/v1.4\n2. Extract InjectorCLI (x86/x64) and HookLibrary DLLs (x86/x64)\n3. Configure directory in Settings > Debugger > ScyllaHide\n4. Select a profile and start debugging\n\nScyllaHide handles PEB manipulation, NT API hooking, and timing protection to hide the debugger from anti-debug checks.",
+	"license": {
+		"name": "MIT",
+		"text": "Copyright (c) 2025 Script-Ware Software\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the \"Software\"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE."
+	},
+	"platforms": ["Windows"],
+	"installinstructions": {
+		"Windows": "1. Install plugin via Binary Ninja Plugin Manager or copy to plugins directory\n2. Download ScyllaHide from https://github.com/x64dbg/ScyllaHide/releases/tag/v1.4\n3. Extract InjectorCLIx64.exe, InjectorCLIx86.exe, HookLibraryx64.dll, HookLibraryx86.dll\n4. Set ScyllaHide directory in Settings > Debugger > ScyllaHide\n5. Restart Binary Ninja"
+	},
+	"dependencies": {},
+	"version": "1.0.0",
+	"author": "Script-Ware Software",
+	"minimumbinaryninjaversion": 5000
+}
