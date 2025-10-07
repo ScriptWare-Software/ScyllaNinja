@@ -185,13 +185,11 @@ def on_debug_event(event):
             injector_path = os.path.join(scylla_dir, injector_exe)
             dll_path = os.path.join(scylla_dir, dll_name)
 
-            cmd = f'"{injector_path}" pid:{pid} "{dll_path}" nowait'
             log_info(f"[ScyllaNinja] Injecting into PID {pid} ({arch})...")
 
             try:
                 result = subprocess.run(
-                    cmd,
-                    shell=True,
+                    [injector_path, f"pid:{pid}", dll_path, "nowait"],
                     capture_output=True,
                     text=True,
                     cwd=scylla_dir,
@@ -257,9 +255,7 @@ def init_plugin():
     validate_scyllahide_directory()
 
     try:
-        settings = Settings()
-        settings.register_group("debugger.scyllaHide", "ScyllaHide")
-        settings.add_property_changed_callback(on_directory_changed)
+        Settings().add_property_changed_callback(on_directory_changed)
     except Exception:
         pass
 
