@@ -3,10 +3,11 @@ import configparser
 import subprocess
 import traceback
 import threading
-from typing import Optional, Dict
-from binaryninja import Settings, log_info, log_error, log_warn, BinaryViewType # type: ignore
+from typing import Optional, Dict, Tuple
+from binaryninja import Settings, log_info, log_error, log_warn, BinaryViewType, interaction # type: ignore
 from binaryninja.binaryview import BinaryView # type: ignore
 from binaryninja.debugger import DebuggerEventType, DebuggerController, DebuggerEvent # type: ignore
+from binaryninja.enums import MessageBoxButtonSet, MessageBoxIcon, MessageBoxButtonResult # type: ignore
 
 from .settings import SETTING_MAP, register_scyllahide_settings
 
@@ -202,13 +203,38 @@ def get_target_pid(controller: DebuggerController) -> Optional[int]:
                 log_info(f"[ScyllaNinja] Detected target PID {proc.pid} (exact match: {proc.name})")
                 return proc.pid
 
+        fuzzy_match = None
         for proc in processes:
             proc_name_lower = proc.name.lower()
             if main_module_name in proc_name_lower or proc_name_lower in main_module_name:
-                log_warn(f"[ScyllaNinja] Detected target PID {proc.pid} (fuzzy match: {proc.name})")
-                return proc.pid
+                fuzzy_match = proc
+                break
 
-        return None
+        if fuzzy_match:
+            log_warn(f"[ScyllaNinja] Fuzzy match found: {fuzzy_match.name} (PID: {fuzzy_match.pid})")
+            result = interaction.show_message_box(
+                "ScyllaHide - Confirm Target Process",
+                f"Fuzzy match detected:\n\nProcess: {fuzzy_match.name}\nPID: {fuzzy_match.pid}\n\nInject into this process?",
+                MessageBoxButtonSet.YesNoButtonSet,
+                MessageBoxIcon.QuestionIcon
+            )
+            if result == MessageBoxButtonResult.YesButton:
+                return fuzzy_match.pid
+
+        process_choices = [f"{proc.name} (PID: {proc.pid})" for proc in processes]
+        choice_index = interaction.get_choice_input(
+            "ScyllaHide - Select Target Process",
+            "Please select the target process:",
+            process_choices
+        )
+
+        if choice_index is None:
+            log_info("[ScyllaNinja] User cancelled process selection")
+            return None
+
+        selected_pid = processes[choice_index].pid
+        log_info(f"[ScyllaNinja] User selected PID {selected_pid} ({processes[choice_index].name})")
+        return selected_pid
 
     except Exception as e:
         log_error(f"[ScyllaNinja] Error getting PID: {e}")
