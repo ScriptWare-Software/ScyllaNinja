@@ -7,10 +7,7 @@ from binaryninja.debugger import DebuggerEventType # type: ignore
 
 from .settings import SETTING_MAP, register_scyllahide_settings
 
-g_controller = None
-g_callback_id = None
-handled_initial_stop = False
-registered_views = set()
+g_binary_states = {}
 
 SCYLLAHIDE_DEFAULTS = {
     "DLLNormal": "1",
@@ -21,6 +18,79 @@ SCYLLAHIDE_DEFAULTS = {
     "AutostartServer": "0",
     "ServerPort": "1337"
 }
+
+class BinaryDebugState:
+    def __init__(self, bv, controller):
+        self.bv = bv
+        self.file_path = bv.file.filename
+        self.controller = controller
+        self.callback_id = None
+        self.handled_initial_stop = False
+
+    def on_debug_event(self, event):
+        if event.type == DebuggerEventType.TargetStoppedEventType:
+            if not self.handled_initial_stop:
+                if not is_scyllahide_enabled():
+                    log_info("[ScyllaNinja] Disabled - skipping ScyllaHide injection")
+                    self.handled_initial_stop = True
+                    return
+
+                pid = get_target_pid(self.controller)
+                if not pid:
+                    log_error("[ScyllaNinja] Failed to detect PID")
+                    return
+
+                arch = get_target_architecture(self.controller)
+                if not arch:
+                    log_error("[ScyllaNinja] Failed to detect architecture")
+                    return
+
+                if not write_scylla_ini():
+                    log_error("[ScyllaNinja] Failed to write INI file")
+                    return
+
+                if not validate_scyllahide_directory():
+                    log_error("[ScyllaNinja] Directory validation failed")
+                    return
+
+                scylla_dir = get_scylla_dir()
+
+                injector_exe = f"InjectorCLI{arch}.exe"
+                dll_name = f"HookLibrary{arch}.dll"
+                injector_path = os.path.join(scylla_dir, injector_exe)
+                dll_path = os.path.join(scylla_dir, dll_name)
+
+                log_info(f"[ScyllaNinja] Injecting into PID {pid} ({arch})...")
+
+                try:
+                    result = subprocess.run(
+                        [injector_path, f"pid:{pid}", dll_path, "nowait"],
+                        capture_output=True,
+                        text=True,
+                        cwd=scylla_dir,
+                        timeout=10
+                    )
+
+                    if result.stdout:
+                        for line in result.stdout.splitlines():
+                            log_info(f"[InjectorCLI] {line}")
+
+                    if result.stderr:
+                        for line in result.stderr.splitlines():
+                            log_error(f"[InjectorCLI] {line}")
+
+                    if result.returncode == 0:
+                        log_info("[ScyllaNinja] Injection successful")
+                    else:
+                        log_error(f"[ScyllaNinja] Injection failed (code {result.returncode})")
+
+                except subprocess.TimeoutExpired:
+                    log_error("[ScyllaNinja] Injection timeout")
+                except Exception as e:
+                    log_error(f"[ScyllaNinja] Injection error: {e}")
+                    log_error(traceback.format_exc())
+
+                self.handled_initial_stop = True
 
 def get_scylla_dir():
     return Settings().get_string("debugger.scyllaHide.02_directory")
@@ -125,13 +195,13 @@ def get_target_pid(controller):
 def get_target_architecture(controller):
     try:
         if hasattr(controller, 'data') and controller.data:
-            arch_name = controller.data.arch.name
+            arch = controller.data.arch
 
-            if 'x86_64' in arch_name or 'amd64' in arch_name:
+            if arch.address_size == 8:
                 return "x64"
-            elif 'x86' in arch_name:
+            elif arch.address_size == 4:
                 return "x86"
-        
+
         return None
 
     except Exception as e:
@@ -146,92 +216,21 @@ def is_scyllahide_enabled():
     except Exception:
         return False
 
-def on_debug_event(event):
-    global handled_initial_stop, g_controller
-
-    if event.type == DebuggerEventType.TargetStoppedEventType: #14
-        if not handled_initial_stop:
-            if not is_scyllahide_enabled():
-                log_info("[ScyllaNinja] Disabled - skipping ScyllaHide injection")
-                handled_initial_stop = True
-                return
-
-            if not g_controller:
-                log_error("[ScyllaNinja] No controller reference")
-                return
-
-            pid = get_target_pid(g_controller)
-            if not pid:
-                log_error("[ScyllaNinja] Failed to detect PID")
-                return
-
-            arch = get_target_architecture(g_controller)
-            if not arch:
-                log_error("[ScyllaNinja] Failed to detect architecture")
-                return
-
-            if not write_scylla_ini():
-                log_error("[ScyllaNinja] Failed to write INI file")
-                return
-
-            if not validate_scyllahide_directory():
-                log_error("[ScyllaNinja] Directory validation failed")
-                return
-
-            scylla_dir = get_scylla_dir()
-
-            injector_exe = f"InjectorCLI{arch}.exe"
-            dll_name = f"HookLibrary{arch}.dll"
-            injector_path = os.path.join(scylla_dir, injector_exe)
-            dll_path = os.path.join(scylla_dir, dll_name)
-
-            log_info(f"[ScyllaNinja] Injecting into PID {pid} ({arch})...")
-
-            try:
-                result = subprocess.run(
-                    [injector_path, f"pid:{pid}", dll_path, "nowait"],
-                    capture_output=True,
-                    text=True,
-                    cwd=scylla_dir,
-                    timeout=10
-                )
-
-                if result.stdout:
-                    for line in result.stdout.splitlines():
-                        log_info(f"[InjectorCLI] {line}")
-
-                if result.stderr:
-                    for line in result.stderr.splitlines():
-                        log_error(f"[InjectorCLI] {line}")
-
-                if result.returncode == 0:
-                    log_info("[ScyllaNinja] Injection successful")
-                else:
-                    log_error(f"[ScyllaNinja] Injection failed (code {result.returncode})")
-
-            except subprocess.TimeoutExpired:
-                log_error("[ScyllaNinja] Injection timeout")
-            except Exception as e:
-                log_error(f"[ScyllaNinja] Injection error: {e}")
-                log_error(traceback.format_exc())
-
-            handled_initial_stop = True
 
 def register_debug_callback(bv):
-    global g_controller, g_callback_id, handled_initial_stop, registered_views
+    global g_binary_states
 
     file_path = bv.file.filename
-    if file_path in registered_views:
+    if file_path in g_binary_states:
         return True
 
     try:
-        from binaryninja.debugger import DebuggerController # type: ignore
+        from binaryninja.debugger import DebuggerController
 
-        handled_initial_stop = False
         controller = DebuggerController(bv)
-        g_controller = controller
-        g_callback_id = controller.register_event_callback(on_debug_event, "ScyllaHide Injection")
-        registered_views.add(file_path)
+        state = BinaryDebugState(bv, controller)
+        state.callback_id = controller.register_event_callback(state.on_debug_event, "ScyllaHide Injection")
+        g_binary_states[file_path] = state
 
         return True
 
