@@ -30,7 +30,10 @@ class BinaryDebugState:
         self.handled_initial_stop = False
 
     def on_debug_event(self, event):
-        if event.type == DebuggerEventType.TargetStoppedEventType:
+        if event.type == DebuggerEventType.LaunchEventType:
+            self.handled_initial_stop = False
+
+        elif event.type == DebuggerEventType.TargetStoppedEventType:
             if not self.handled_initial_stop:
                 if not is_scyllahide_enabled():
                     log_info("[ScyllaNinja] Disabled - skipping ScyllaHide injection")
@@ -38,8 +41,8 @@ class BinaryDebugState:
                     return
 
                 pid = get_target_pid(self.controller)
-                if not pid:
-                    log_error("[ScyllaNinja] Failed to detect PID")
+                if not pid or not isinstance(pid, int) or pid <= 0:
+                    log_error("[ScyllaNinja] Failed to detect valid PID")
                     return
 
                 arch = get_target_architecture(self.controller)
