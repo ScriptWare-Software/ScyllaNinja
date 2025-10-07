@@ -281,7 +281,14 @@ def register_debug_callback(bv: BinaryView) -> bool:
 
     with g_state_lock:
         if file_path in g_binary_states:
-            return True
+            old_state = g_binary_states[file_path]
+            try:
+                if old_state.callback_id is not None:
+                    old_state.controller.remove_event_callback(old_state.callback_id)
+                    log_info(f"[ScyllaNinja] Cleaned up stale callback for {file_path}")
+            except Exception as e:
+                log_warn(f"[ScyllaNinja] Failed to clean up old callback: {e}")
+            del g_binary_states[file_path]
 
         try:
             from binaryninja.debugger import DebuggerController # type: ignore
