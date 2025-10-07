@@ -3,6 +3,7 @@ import configparser
 import subprocess
 import traceback
 import threading
+import webbrowser
 from typing import Optional, Dict, Tuple
 from binaryninja import Settings, log_info, log_error, log_warn, BinaryViewType, interaction, PluginCommand # type: ignore
 from binaryninja.binaryview import BinaryView # type: ignore
@@ -26,7 +27,6 @@ SCYLLAHIDE_DEFAULTS: Dict[str, str] = {
 
 class BinaryDebugState:
     def __init__(self, bv: BinaryView, controller: DebuggerController) -> None:
-        self.bv: BinaryView = bv
         self.file_path: str = bv.file.filename
         self.controller: DebuggerController = controller
         self.callback_id: Optional[int] = None
@@ -129,6 +129,7 @@ def write_scylla_ini() -> bool:
         log_error(traceback.format_exc())
         return False
 
+# binja's debugger doesn't have a way to get the process id of the target program currently, will be changed when this is added
 def get_target_pid(controller: DebuggerController) -> Optional[int]:
     try:
         if not controller.connected:
@@ -356,7 +357,23 @@ def init_plugin() -> None:
     except Exception as e:
         log_error(f"[ScyllaNinja] Failed to register settings: {e}")
 
-    validate_scyllahide_directory()
+    if not validate_scyllahide_directory():
+        result = interaction.show_message_box(
+            "ScyllaNinja - Setup Required",
+            "ScyllaHide directory is not configured or is missing required files.\n\n"
+            "Would you like to download ScyllaHide now?\n\n"
+            "The required files are:\n"
+            "- InjectorCLIx64.exe\n"
+            "- InjectorCLIx86.exe\n"
+            "- HookLibraryx64.dll\n"
+            "- HookLibraryx86.dll\n\n"
+            "After downloading, extract the files and configure the directory in:\n"
+            "Edit > Preferences > Settings > Debugger > scyllahide",
+            MessageBoxButtonSet.YesNoButtonSet,
+            MessageBoxIcon.QuestionIcon
+        )
+        if result == MessageBoxButtonResult.YesButton:
+            webbrowser.open("https://github.com/x64dbg/ScyllaHide/releases/tag/v1.4")
 
     try:
         Settings().add_property_changed_callback(on_directory_changed)
