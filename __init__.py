@@ -4,7 +4,7 @@ import subprocess
 import traceback
 import threading
 from typing import Optional, Dict
-from binaryninja import Settings, log_info, log_error, BinaryViewType # type: ignore
+from binaryninja import Settings, log_info, log_error, log_warn, BinaryViewType # type: ignore
 from binaryninja.binaryview import BinaryView # type: ignore
 from binaryninja.debugger import DebuggerEventType, DebuggerController, DebuggerEvent # type: ignore
 
@@ -180,16 +180,29 @@ def write_scylla_ini() -> bool:
 
 def get_target_pid(controller: DebuggerController) -> Optional[int]:
     try:
+        if not controller.connected:
+            return None
+
         modules = controller.modules
         if not modules:
             return None
 
         main_module_name = modules[0].short_name.lower()
+        main_module_base = os.path.splitext(main_module_name)[0]
         processes = controller.processes
 
         for proc in processes:
             proc_name_lower = proc.name.lower()
+            proc_name_base = os.path.splitext(proc_name_lower)[0]
+
+            if proc_name_lower == main_module_name or proc_name_base == main_module_base:
+                log_info(f"[ScyllaNinja] Detected target PID {proc.pid} (exact match: {proc.name})")
+                return proc.pid
+
+        for proc in processes:
+            proc_name_lower = proc.name.lower()
             if main_module_name in proc_name_lower or proc_name_lower in main_module_name:
+                log_warn(f"[ScyllaNinja] Detected target PID {proc.pid} (fuzzy match: {proc.name})")
                 return proc.pid
 
         return None
