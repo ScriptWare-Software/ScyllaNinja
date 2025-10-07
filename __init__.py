@@ -4,7 +4,7 @@ import subprocess
 import traceback
 import threading
 import webbrowser
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict
 from binaryninja import Settings, log_info, log_error, log_warn, BinaryViewType, interaction, PluginCommand # type: ignore
 from binaryninja.binaryview import BinaryView # type: ignore
 from binaryninja.debugger import DebuggerEventType, DebuggerController, DebuggerEvent # type: ignore
@@ -31,12 +31,14 @@ class BinaryDebugState:
         self.controller: DebuggerController = controller
         self.callback_id: Optional[int] = None
         self.handled_initial_stop: bool = False
+        self.injected: bool = False
         self.lock: threading.Lock = threading.Lock()
 
     def on_debug_event(self, event: DebuggerEvent) -> None:
         if event.type == DebuggerEventType.LaunchEventType:
             with self.lock:
                 self.handled_initial_stop = False
+                self.injected = False
 
         elif event.type == DebuggerEventType.TargetStoppedEventType:
             with self.lock:
@@ -48,7 +50,9 @@ class BinaryDebugState:
                 log_info("[ScyllaNinja] Disabled - skipping ScyllaHide injection")
                 return
 
-            perform_injection(self.controller)
+            if perform_injection(self.controller):
+                with self.lock:
+                    self.injected = True
 
 def get_scylla_dir() -> str:
     return Settings().get_string("debugger.scyllahide.02_directory")
@@ -94,7 +98,12 @@ def write_scylla_ini() -> bool:
         config = configparser.ConfigParser()
 
         if os.path.exists(ini_path):
-            config.read(ini_path)
+            try:
+                config.read(ini_path)
+            except configparser.Error as e:
+                log_warn(f"[ScyllaNinja] Could not parse existing INI: {e}, creating new")
+            except Exception as e:
+                log_warn(f"[ScyllaNinja] Error reading INI file: {e}, creating new")
 
         if not config.has_section("SETTINGS"):
             config.add_section("SETTINGS")
@@ -124,6 +133,9 @@ def write_scylla_ini() -> bool:
 
         return True
 
+    except (IOError, PermissionError) as e:
+        log_error(f"[ScyllaNinja] Cannot write to INI file: {e}")
+        return False
     except Exception as e:
         log_error(f"[ScyllaNinja] Failed to write INI: {e}")
         log_error(traceback.format_exc())
@@ -139,9 +151,18 @@ def get_target_pid(controller: DebuggerController) -> Optional[int]:
         if not modules:
             return None
 
-        main_module_name = modules[0].short_name.lower()
+        main_module_name = modules[0].short_name
+        if not main_module_name:
+            log_error("[ScyllaNinja] Main module has no name")
+            return None
+
+        main_module_name = main_module_name.lower()
         main_module_base = os.path.splitext(main_module_name)[0]
         processes = controller.processes
+
+        if not processes:
+            log_error("[ScyllaNinja] No processes available")
+            return None
 
         for proc in processes:
             proc_name_lower = proc.name.lower()
@@ -169,7 +190,13 @@ def get_target_pid(controller: DebuggerController) -> Optional[int]:
             if result == MessageBoxButtonResult.YesButton:
                 return fuzzy_match.pid
 
-        process_choices = [f"{proc.name} (PID: {proc.pid})" for proc in processes]
+        user_processes = [proc for proc in processes if proc.pid > 100]
+
+        if not user_processes:
+            log_warn("[ScyllaNinja] No user processes found (all PIDs <= 100)")
+            user_processes = processes
+
+        process_choices = [f"{proc.name} (PID: {proc.pid})" for proc in user_processes]
         choice_index = interaction.get_choice_input(
             "ScyllaHide - Select Target Process",
             "Please select the target process:",
@@ -180,8 +207,8 @@ def get_target_pid(controller: DebuggerController) -> Optional[int]:
             log_info("[ScyllaNinja] User cancelled process selection")
             return None
 
-        selected_pid = processes[choice_index].pid
-        log_info(f"[ScyllaNinja] User selected PID {selected_pid} ({processes[choice_index].name})")
+        selected_pid = user_processes[choice_index].pid
+        log_info(f"[ScyllaNinja] User selected PID {selected_pid} ({user_processes[choice_index].name})")
         return selected_pid
 
     except Exception as e:
@@ -198,6 +225,9 @@ def get_target_architecture(controller: DebuggerController) -> Optional[str]:
                 return "x64"
             elif arch.address_size == 4:
                 return "x86"
+            else:
+                log_warn(f"[ScyllaNinja] Unknown architecture: address_size={arch.address_size}")
+                return None
 
         return None
 
@@ -215,6 +245,10 @@ def is_scyllahide_enabled() -> bool:
 
 def perform_injection(controller: DebuggerController) -> bool:
     try:
+        if not validate_scyllahide_directory():
+            log_error("[ScyllaNinja] Directory validation failed")
+            return False
+
         pid = get_target_pid(controller)
         if not pid or not isinstance(pid, int) or pid <= 0:
             log_error("[ScyllaNinja] Failed to detect valid PID")
@@ -227,10 +261,6 @@ def perform_injection(controller: DebuggerController) -> bool:
 
         if not write_scylla_ini():
             log_error("[ScyllaNinja] Failed to write INI file")
-            return False
-
-        if not validate_scyllahide_directory():
-            log_error("[ScyllaNinja] Directory validation failed")
             return False
 
         scylla_dir = get_scylla_dir()
@@ -295,7 +325,7 @@ def register_debug_callback(bv: BinaryView) -> bool:
 
             controller = DebuggerController(bv)
             state = BinaryDebugState(bv, controller)
-            state.callback_id = controller.register_event_callback(state.on_debug_event, "ScyllaHide Injection")
+            state.callback_id = controller.register_event_callback(state.on_debug_event, "ScyllaNinja - ScyllaHide Injection")
             g_binary_states[file_path] = state
 
             return True
@@ -317,15 +347,45 @@ def manual_inject_handler(bv: BinaryView) -> None:
 
         if not controller.connected:
             interaction.show_message_box(
-                "ScyllaHide - Not Debugging",
+                "ScyllaNinja - Not Debugging",
                 "No active debug session. Start debugging first.",
                 MessageBoxButtonSet.OKButtonSet,
                 MessageBoxIcon.ErrorIcon
             )
             return
 
+        file_path = bv.file.filename
+        with g_state_lock:
+            state = g_binary_states.get(file_path)
+            if not state:
+                register_debug_callback(bv)
+                state = g_binary_states.get(file_path)
+
+            if state:
+                with state.lock:
+                    already_injected = state.injected
+            else:
+                already_injected = False
+
+        if already_injected:
+            result = interaction.show_message_box(
+                "ScyllaHide - Already Injected",
+                "ScyllaHide has already been injected into this process.\n\nInject again anyway?",
+                MessageBoxButtonSet.YesNoButtonSet,
+                MessageBoxIcon.WarningIcon
+            )
+            if result != MessageBoxButtonResult.YesButton:
+                return
+
         log_info("[ScyllaNinja] Manual injection requested")
         success = perform_injection(controller)
+
+        if success:
+            with g_state_lock:
+                state = g_binary_states.get(file_path)
+                if state:
+                    with state.lock:
+                        state.injected = True
 
         if success:
             interaction.show_message_box(
@@ -345,7 +405,7 @@ def manual_inject_handler(bv: BinaryView) -> None:
         log_error(f"[ScyllaNinja] Manual injection error: {e}")
         log_error(traceback.format_exc())
         interaction.show_message_box(
-            "ScyllaHide - Error",
+            "ScyllaNinja - Error",
             f"Error during injection: {e}",
             MessageBoxButtonSet.OKButtonSet,
             MessageBoxIcon.ErrorIcon
@@ -390,7 +450,7 @@ def init_plugin() -> None:
     BinaryViewType.add_binaryview_finalized_event(on_view_open)
 
     PluginCommand.register(
-        "ScyllaHide\\Inject Now",
+        "ScyllaNinja\\Inject ScyllaHide",
         "Manually inject ScyllaHide into the debugged process",
         manual_inject_handler,
         is_debugging
