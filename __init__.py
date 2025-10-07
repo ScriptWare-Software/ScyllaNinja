@@ -5,7 +5,7 @@ import traceback
 import threading
 import webbrowser
 from typing import Optional, Dict
-from binaryninja import Settings, log_info, log_error, log_warn, BinaryViewType, interaction, PluginCommand # type: ignore
+from binaryninja import Settings, log_info, log_error, log_warn, BinaryViewType, interaction, PluginCommand, BackgroundTask # type: ignore
 from binaryninja.binaryview import BinaryView # type: ignore
 from binaryninja.debugger import DebuggerEventType, DebuggerController, DebuggerEvent # type: ignore
 from binaryninja.enums import MessageBoxButtonSet, MessageBoxIcon, MessageBoxButtonResult # type: ignore
@@ -190,13 +190,7 @@ def get_target_pid(controller: DebuggerController) -> Optional[int]:
             if result == MessageBoxButtonResult.YesButton:
                 return fuzzy_match.pid
 
-        user_processes = [proc for proc in processes if proc.pid > 100]
-
-        if not user_processes:
-            log_warn("[ScyllaNinja] No user processes found (all PIDs <= 100)")
-            user_processes = processes
-
-        process_choices = [f"{proc.name} (PID: {proc.pid})" for proc in user_processes]
+        process_choices = [f"{proc.name} (PID: {proc.pid})" for proc in processes]
         choice_index = interaction.get_choice_input(
             "ScyllaHide - Select Target Process",
             "Please select the target process:",
@@ -207,8 +201,8 @@ def get_target_pid(controller: DebuggerController) -> Optional[int]:
             log_info("[ScyllaNinja] User cancelled process selection")
             return None
 
-        selected_pid = user_processes[choice_index].pid
-        log_info(f"[ScyllaNinja] User selected PID {selected_pid} ({user_processes[choice_index].name})")
+        selected_pid = processes[choice_index].pid
+        log_info(f"[ScyllaNinja] User selected PID {selected_pid} ({processes[choice_index].name})")
         return selected_pid
 
     except Exception as e:
@@ -244,23 +238,31 @@ def is_scyllahide_enabled() -> bool:
         return False
 
 def perform_injection(controller: DebuggerController) -> bool:
+    task = BackgroundTask("ScyllaNinja: Validating...")
     try:
         if not validate_scyllahide_directory():
             log_error("[ScyllaNinja] Directory validation failed")
+            task.finish()
             return False
 
+        task.progress = "ScyllaNinja: Detecting process..."
         pid = get_target_pid(controller)
         if not pid or not isinstance(pid, int) or pid <= 0:
             log_error("[ScyllaNinja] Failed to detect valid PID")
+            task.finish()
             return False
 
+        task.progress = "ScyllaNinja: Detecting architecture..."
         arch = get_target_architecture(controller)
         if not arch:
             log_error("[ScyllaNinja] Failed to detect architecture")
+            task.finish()
             return False
 
+        task.progress = "ScyllaNinja: Writing configuration..."
         if not write_scylla_ini():
             log_error("[ScyllaNinja] Failed to write INI file")
+            task.finish()
             return False
 
         scylla_dir = get_scylla_dir()
@@ -270,6 +272,7 @@ def perform_injection(controller: DebuggerController) -> bool:
         injector_path = os.path.join(scylla_dir, injector_exe)
         dll_path = os.path.join(scylla_dir, dll_name)
 
+        task.progress = f"ScyllaNinja: Injecting into PID {pid} ({arch})..."
         log_info(f"[ScyllaNinja] Injecting into PID {pid} ({arch})...")
 
         result = subprocess.run(
@@ -289,57 +292,69 @@ def perform_injection(controller: DebuggerController) -> bool:
                 log_error(f"[InjectorCLI] {line}")
 
         if result.returncode == 0:
+            task.progress = "ScyllaNinja: Injection successful"
             log_info("[ScyllaNinja] Injection successful")
+            task.finish()
             return True
         else:
             log_error(f"[ScyllaNinja] Injection failed (code {result.returncode})")
+            task.finish()
             return False
 
     except subprocess.TimeoutExpired:
         log_error("[ScyllaNinja] Injection timeout")
+        task.finish()
         return False
     except Exception as e:
         log_error(f"[ScyllaNinja] Injection error: {e}")
         log_error(traceback.format_exc())
+        task.finish()
         return False
 
 
 def register_debug_callback(bv: BinaryView) -> bool:
-    global g_binary_states
-
     file_path: str = bv.file.filename
 
+    old_state = None
     with g_state_lock:
         if file_path in g_binary_states:
             old_state = g_binary_states[file_path]
-            try:
-                if old_state.callback_id is not None:
-                    old_state.controller.remove_event_callback(old_state.callback_id)
-                    log_info(f"[ScyllaNinja] Cleaned up stale callback for {file_path}")
-            except Exception as e:
-                log_warn(f"[ScyllaNinja] Failed to clean up old callback: {e}")
             del g_binary_states[file_path]
 
+    if old_state:
         try:
-            from binaryninja.debugger import DebuggerController # type: ignore
+            if old_state.callback_id is not None:
+                old_state.controller.remove_event_callback(old_state.callback_id)
+                log_info(f"[ScyllaNinja] Cleaned up stale callback for {file_path}")
+        except Exception as e:
+            log_warn(f"[ScyllaNinja] Failed to clean up old callback: {e}")
 
-            controller = DebuggerController(bv)
-            state = BinaryDebugState(bv, controller)
-            state.callback_id = controller.register_event_callback(state.on_debug_event, "ScyllaNinja - ScyllaHide Injection")
+    try:
+        controller = DebuggerController(bv)
+        state = BinaryDebugState(bv, controller)
+        state.callback_id = controller.register_event_callback(state.on_debug_event, "ScyllaNinja - ScyllaHide Injection")
+
+        with g_state_lock:
             g_binary_states[file_path] = state
 
-            return True
+        return True
 
-        except Exception as e:
-            log_error(f"[ScyllaNinja] Failed to register callback: {e}")
-            return False
+    except Exception as e:
+        log_error(f"[ScyllaNinja] Failed to register callback: {e}")
+        return False
 
 def on_view_open(bv: BinaryView) -> None:
-    register_debug_callback(bv)
+    success = register_debug_callback(bv)
+    if not success:
+        log_error(f"[ScyllaNinja] Failed to register debug callback for {bv.file.filename}")
 
 def on_directory_changed(setting_name: str) -> None:
     if setting_name == "debugger.scyllahide.02_directory":
-        validate_scyllahide_directory()
+        valid = validate_scyllahide_directory()
+        if valid:
+            log_info("[ScyllaNinja] ScyllaHide directory validated successfully")
+        else:
+            log_error("[ScyllaNinja] ScyllaHide directory validation failed - check settings")
 
 def manual_inject_handler(bv: BinaryView) -> None:
     try:
@@ -355,17 +370,29 @@ def manual_inject_handler(bv: BinaryView) -> None:
             return
 
         file_path = bv.file.filename
+
+        state = None
         with g_state_lock:
             state = g_binary_states.get(file_path)
-            if not state:
-                register_debug_callback(bv)
+
+        if not state:
+            success = register_debug_callback(bv)
+            if not success:
+                log_error("[ScyllaNinja] Failed to register debug state")
+                interaction.show_message_box(
+                    "ScyllaNinja - Error",
+                    "Failed to initialize debug state. Cannot inject.",
+                    MessageBoxButtonSet.OKButtonSet,
+                    MessageBoxIcon.ErrorIcon
+                )
+                return
+            with g_state_lock:
                 state = g_binary_states.get(file_path)
 
-            if state:
-                with state.lock:
-                    already_injected = state.injected
-            else:
-                already_injected = False
+        already_injected = False
+        if state:
+            with state.lock:
+                already_injected = state.injected
 
         if already_injected:
             result = interaction.show_message_box(
@@ -386,14 +413,6 @@ def manual_inject_handler(bv: BinaryView) -> None:
                 if state:
                     with state.lock:
                         state.injected = True
-
-        if success:
-            interaction.show_message_box(
-                "ScyllaHide - Injection Successful",
-                "ScyllaHide has been injected successfully.",
-                MessageBoxButtonSet.OKButtonSet,
-                MessageBoxIcon.InformationIcon
-            )
         else:
             interaction.show_message_box(
                 "ScyllaHide - Injection Failed",
@@ -444,8 +463,8 @@ def init_plugin() -> None:
 
     try:
         Settings().add_property_changed_callback(on_directory_changed)
-    except Exception:
-        pass
+    except Exception as e:
+        log_warn(f"[ScyllaNinja] Failed to register settings callback: {e}")
 
     BinaryViewType.add_binaryview_finalized_event(on_view_open)
 
