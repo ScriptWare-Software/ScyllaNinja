@@ -61,7 +61,7 @@ def validate_scyllahide_directory() -> bool:
     try:
         scylla_dir = get_scylla_dir()
 
-        if not scylla_dir or not os.path.exists(scylla_dir):
+        if not scylla_dir or not os.path.isdir(scylla_dir):
             log_error(f"[ScyllaNinja] Invalid directory: {scylla_dir}")
             return False
 
