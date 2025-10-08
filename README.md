@@ -1,7 +1,7 @@
 # ScyllaNinja
 Author: **Script-Ware Software**
 
-_Automated ScyllaHide injection and setup for Binary Ninja's debugger_
+_Automated ScyllaHide injection and setup/configuration for Binary Ninja's debugger_
 
 ## Description
 
@@ -23,30 +23,45 @@ ScyllaHide handles PEB manipulation, NT API hooking, and timing protection to hi
    - `HookLibraryx64.dll`
    - `HookLibraryx86.dll`
 
-4. Configure in `Edit > Preferences > Settings > Debugger > ScyllaHide`:
+4. Configure in `Edit > Settings > Debugger > scyllahide`:
    - Set "ScyllaHide Directory" to the path containing extracted files
-   - Select a profile (default: Basic)
+   - Enable "Enable Automatic ScyllaHide Injection" (if you want)
+   - Select a profile (default: Basic) or make a custom one
 
-5. Open a x64/x86 binary of your choice
+5. Open a x64/x86 binary and start debugging
 
-6. Set a breakpoint on the program's entry
-
-7. ScyllaHide is automatically injected and set up.
+6. ScyllaHide is automatically injected when the debugger hits the initial breakpoint
 
 ## Usage
 
-Once configured, ScyllaHide automatically injects when you start debugging any Windows executable. Console output will indicate injection status.
+### Automatic Injection
+
+If configured (see Settings), ScyllaHide automatically injects when you start debugging any Windows executable. The status bar shows real-time progress during injection, and console output logs detailed status.
+
+### Manual Injection
+
+You can manually inject ScyllaHide at any time during a debug session via:
+- **Plugins > ScyllaNinja > Inject ScyllaHide**
+
+This is useful for:
+- Retrying if automatic injection failed
+- Injecting after the initial breakpoint
+- Re-injecting after modifying settings
+
+The plugin prevents accidental double-injection by tracking injection state and prompting for confirmation.
 
 ## Settings
 
-Found in Binary Ninja Settings under `Debugger > ScyllaHide`:
+Found in Binary Ninja Settings under `Debugger > scyllahide`:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| Enable ScyllaHide | true | Automatically inject when debugger hits initial breakpoint |
+| Enable Automatic ScyllaHide Injection | false | Automatically inject when debugger hits initial breakpoint |
 | Profile | Basic | Pre-configured hook profile (preset profiles use built-in configs) |
 | ScyllaHide Directory | plugin folder | Directory containing InjectorCLI and HookLibrary DLLs |
 | Individual Hooks | varies | PEB, NT API, and timing hooks (only apply when Profile = Custom) |
+
+**Note:** Remember that the individual hook settings are only used when Profile is set to "Custom". For preset profiles like "Basic" or "VMProtect x86/x64", ScyllaHide uses its already built-in configurations.
 
 ## Minimum Version
 
@@ -59,6 +74,8 @@ This plugin (was only tested on but likely) requires the following minimum versi
 The following dependencies are required for this plugin:
 
 * ScyllaHide binaries (InjectorCLI + HookLibrary DLLs) from https://github.com/x64dbg/ScyllaHide/releases
+
+The plugin will alert you if these files don't exist and are not set up in the settings. 
 
 ## License
 
