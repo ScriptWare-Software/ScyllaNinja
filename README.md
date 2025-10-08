@@ -43,12 +43,7 @@ If configured (see Settings), ScyllaHide automatically injects when you start de
 You can manually inject ScyllaHide at any time during a debug session via:
 - **Plugins > ScyllaNinja > Inject ScyllaHide**
 
-This is useful for:
-- Retrying if automatic injection failed
-- Injecting after the initial breakpoint
-- Re-injecting after modifying settings
-
-The plugin prevents accidental double-injection by tracking injection state and prompting for confirmation.
+ScyllaNinja prevents accidental double-injection by asking you to confirm if you actually want to inject again.
 
 ## Settings
 
