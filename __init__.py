@@ -242,27 +242,23 @@ def perform_injection(controller: DebuggerController) -> bool:
     try:
         if not validate_scyllahide_directory():
             log_error("[ScyllaNinja] Directory validation failed")
-            task.finish()
             return False
 
         task.progress = "ScyllaNinja: Detecting process..."
         pid = get_target_pid(controller)
         if not pid or not isinstance(pid, int) or pid <= 0:
             log_error("[ScyllaNinja] Failed to detect valid PID")
-            task.finish()
             return False
 
         task.progress = "ScyllaNinja: Detecting architecture..."
         arch = get_target_architecture(controller)
         if not arch:
             log_error("[ScyllaNinja] Failed to detect architecture")
-            task.finish()
             return False
 
         task.progress = "ScyllaNinja: Writing configuration..."
         if not write_scylla_ini():
             log_error("[ScyllaNinja] Failed to write INI file")
-            task.finish()
             return False
 
         scylla_dir = get_scylla_dir()
@@ -294,22 +290,20 @@ def perform_injection(controller: DebuggerController) -> bool:
         if result.returncode == 0:
             task.progress = "ScyllaNinja: Injection successful"
             log_info("[ScyllaNinja] Injection successful")
-            task.finish()
             return True
         else:
             log_error(f"[ScyllaNinja] Injection failed (code {result.returncode})")
-            task.finish()
             return False
 
     except subprocess.TimeoutExpired:
         log_error("[ScyllaNinja] Injection timeout")
-        task.finish()
         return False
     except Exception as e:
         log_error(f"[ScyllaNinja] Injection error: {e}")
         log_error(traceback.format_exc())
-        task.finish()
         return False
+    finally:
+        task.finish()
 
 
 def register_debug_callback(bv: BinaryView) -> bool:
@@ -347,14 +341,6 @@ def on_view_open(bv: BinaryView) -> None:
     success = register_debug_callback(bv)
     if not success:
         log_error(f"[ScyllaNinja] Failed to register debug callback for {bv.file.filename}")
-
-def on_directory_changed(setting_name: str) -> None:
-    if setting_name == "debugger.scyllahide.02_directory":
-        valid = validate_scyllahide_directory()
-        if valid:
-            log_info("[ScyllaNinja] ScyllaHide directory validated successfully")
-        else:
-            log_error("[ScyllaNinja] ScyllaHide directory validation failed - check settings")
 
 def manual_inject_handler(bv: BinaryView) -> None:
     try:
@@ -454,17 +440,12 @@ def init_plugin() -> None:
             "- HookLibraryx64.dll\n"
             "- HookLibraryx86.dll\n\n"
             "After downloading, extract the files and configure the directory in:\n"
-            "Edit > Preferences > Settings > Debugger > scyllahide",
+            "Edit > Settings > Debugger > scyllahide",
             MessageBoxButtonSet.YesNoButtonSet,
             MessageBoxIcon.QuestionIcon
         )
         if result == MessageBoxButtonResult.YesButton:
             webbrowser.open("https://github.com/x64dbg/ScyllaHide/releases/tag/v1.4")
-
-    try:
-        Settings().add_property_changed_callback(on_directory_changed)
-    except Exception as e:
-        log_warn(f"[ScyllaNinja] Failed to register settings callback: {e}")
 
     BinaryViewType.add_binaryview_finalized_event(on_view_open)
 
